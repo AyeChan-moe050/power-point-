@@ -11,13 +11,19 @@ from pptx.util import Inches, Pt
 from pypdf import PdfReader
 
 st.set_page_config(
-    page_title="PDF / Word မှ PowerPoint (မြန်မာ + English) ထုတ်ပေးသည့် စနစ်",
+    page_title="PDF / Word မှ PowerPoint ထုတ်ပေးသည့် စနစ်",
     page_icon="📊",
     layout="wide",
 )
 
-st.title("📊 PDF / Word မှ PowerPoint (မြန်မာ + English) ထုတ်ပေးသည့် စနစ်")
-st.caption("PDF နှင့် Word (.docx) ဖိုင်များကို တင်ပြီး မြန်မာဘာသာ PowerPoint ၁ ဖိုင် နှင့် English PowerPoint ၁ ဖိုင် ထုတ်ယူပါ။")
+st.title("📊 PDF / Word မှ PowerPoint ထုတ်ပေးသည့် စနစ်")
+st.caption("PDF နှင့် Word (.docx) ဖိုင်များကို တင်ပြီး မြန်မာ (သို့မဟုတ်) English PowerPoint ၁ ဖိုင် ရွေးချယ်ထုတ်ယူပါ။")
+
+MODEL_CANDIDATES = [
+    "gemini-3.8-flash",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+]
 
 
 def get_api_key() -> str:
@@ -53,36 +59,86 @@ def extract_pdf_text(uploaded_file) -> str:
     return "\n\n".join(parts)
 
 
-def generate_bilingual_slides_json(
+def call_gemini_with_fallback(
+    client: genai.Client,
+    prompt: str,
+    response_schema: dict,
+    preferred_model: str,
+) -> dict:
+    models_to_try = [preferred_model] + [m for m in MODEL_CANDIDATES if m != preferred_model]
+    errors = []
+
+    for model_name in models_to_try:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=response_schema,
+                    ),
+                )
+                raw_text = response.text or "{}"
+                return json.loads(raw_text)
+            except Exception as exc:
+                err_str = str(exc)
+                errors.append(f"{model_name}: {err_str}")
+                is_overload = ("503" in err_str) or ("UNAVAILABLE" in err_str) or ("429" in err_str)
+                if is_overload and attempt == 0:
+                    time.sleep(2)
+                    continue
+                break
+
+    raise RuntimeError(
+        "Model အားလုံး ခေတ္တဝန်ပိနေပါသည် (သို့မဟုတ် အသုံးပြုခွင့် ကန့်သတ်ထားပါသည်)။\n"
+        + "\n".join(errors[-3:])
+    )
+
+
+def generate_slides_json(
     api_key: str,
     source_text: str,
     slide_count: int,
+    language_choice: str,
     extra_note: str,
-) -> dict:
+    preferred_model: str,
+) -> list[dict]:
     client = genai.Client(api_key=api_key)
+    trimmed_text = source_text[:35000]
+
+    if language_choice == "မြန်မာဘာသာ (Myanmar)":
+        lang_instruction = (
+            "Slide များ၏ title နှင့် bullets အားလုံးကို **မြန်မာဘာသာ** သီးသန့်ဖြင့် ရှင်းလင်းတိုတုတ်စွာ ရေးပါ "
+            "(Slide တစ်ခုလျှင် bullet ၃ မှ ၄ ချက်ခန့်၊ ကျစ်လျစ်စွာ ရေးပါ)။"
+        )
+    else:
+        lang_instruction = (
+            "Write all slide titles and bullet points strictly in **English**, concise and clear "
+            "(around 3 to 4 bullet points per slide)."
+        )
 
     prompt = f"""
 သင်သည် အစိုးရဌာန/အဖွဲ့အစည်းများနှင့် ပရော်ဖက်ရှင်နယ် တင်ပြချက်များအတွက် PowerPoint presentation ဖွဲ့စည်းပုံကို စနစ်တကျ ရေးသားပေးနိုင်သော ကျွမ်းကျင်သူတစ်ဦး ဖြစ်သည်။
 
-ပေးထားသော PDF / Word စာရွက်စာတမ်းများမှ အဓိက အချက်အလက်များကို အခြေခံ၍ Slide အရေအတွက် ခန့်မှန်းခြေ {slide_count} slides ခန့် ပါဝင်သော PowerPoint outline ကို **မြန်မာဘာသာ (myanmar)** နှင့် **အင်္ဂလိပ်ဘာသာ (english)** နှစ်မျိုးလုံးအတွက် ပြုစုပေးပါ။
+ပေးထားသော PDF / Word စာရွက်စာတမ်းများမှ အဓိက အချက်အလက်များကို အခြေခံ၍ Slide အရေအတွက် ခန့်မှန်းခြေ {slide_count} slides ခန့် ပါဝင်သော PowerPoint outline ကို ပြုစုပေးပါ။
 
 ### လိုက်နာရမည့် စည်းကမ်းများ
-1. `myanmar` array ထဲရှိ slide များ၏ title နှင့် bullets များကို **မြန်မာဘာသာ** သီးသန့်ဖြင့် ရှင်းလင်းတိုတုတ်စွာ ရေးပါ (Slide တစ်ခုလျှင် bullet ၃ မှ ၅ ချက်ခန့်၊ စာကြောင်းတစ်ကြောင်းချင်းစီကို Slide မှာ အလွယ်တကူ ဖတ်နိုင်အောင် ကျစ်လျစ်စွာ ရေးပါ)။
-2. `english` array ထဲရှိ slide များ၏ title နှင့် bullets များကို **အင်္ဂလိပ်ဘာသာ** သီးသန့်ဖြင့် အဓိပ္ပာယ်ကိုက်ညီစွာ ရေးပါ (Slide တစ်ခုလျှင် bullet ၃ မှ ၅ ချက်ခန့်)။
-3. ပထမဆုံး Slide သည် Presentation ခေါင်းစဉ် (Title Slide) ဖြစ်သင့်ပြီး နောက်ဆုံး Slide သည် နိဂုံး/အနှစ်ချုပ် (Summary / Conclusion) ဖြစ်သင့်သည်။
-4. Source text ထဲတွင် မပါဝင်သော နေ့ရက်၊ ကိန်းဂဏန်း၊ အမည်များကို မတီထွင်ပါနှင့်။
+1. {lang_instruction}
+2. ပထမဆုံး Slide သည် Presentation ခေါင်းစဉ် (Title Slide) ဖြစ်သင့်ပြီး နောက်ဆုံး Slide သည် နိဂုံး/အနှစ်ချုပ် (Summary / Conclusion) ဖြစ်သင့်သည်။
+3. Source text ထဲတွင် မပါဝင်သော နေ့ရက်၊ ကိန်းဂဏန်း၊ အမည်များကို မတီထွင်ပါနှင့်။
 
 ### ထပ်မံမှာကြားချက် (ရှိပါက)
 {extra_note.strip() if extra_note.strip() else "မရှိပါ"}
 
 ### စာရွက်စာတမ်းများမှ ထုတ်ယူထားသော အချက်အလက်များ
-{source_text}
+{trimmed_text}
 """.strip()
 
     response_schema = {
         "type": "OBJECT",
         "properties": {
-            "myanmar": {
+            "slides": {
                 "type": "ARRAY",
                 "items": {
                     "type": "OBJECT",
@@ -92,42 +148,18 @@ def generate_bilingual_slides_json(
                     },
                     "required": ["title", "bullets"],
                 },
-            },
-            "english": {
-                "type": "ARRAY",
-                "items": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "title": {"type": "STRING"},
-                        "bullets": {"type": "ARRAY", "items": {"type": "STRING"}},
-                    },
-                    "required": ["title", "bullets"],
-                },
-            },
+            }
         },
-        "required": ["myanmar", "english"],
+        "required": ["slides"],
     }
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=response_schema,
-                ),
-            )
-            raw_text = response.text or "{}"
-            return json.loads(raw_text)
-        except Exception as exc:
-            err_str = str(exc)
-            is_transient = ("503" in err_str) or ("UNAVAILABLE" in err_str) or ("429" in err_str)
-            if is_transient and attempt < max_retries - 1:
-                time.sleep(2 * (attempt + 1))
-                continue
-            raise
+    result = call_gemini_with_fallback(
+        client=client,
+        prompt=prompt,
+        response_schema=response_schema,
+        preferred_model=preferred_model,
+    )
+    return result.get("slides", [])
 
 
 def build_pptx_bytes(slides: list[dict], font_name: str) -> bytes:
@@ -197,11 +229,19 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
 )
 
-c1, c2 = st.columns(2)
+c1, c2, c3, c4 = st.columns(4)
 with c1:
-    slide_count = st.slider("ခန့်မှန်း Slide အရေအတွက်", min_value=4, max_value=20, value=8)
+    language_choice = st.radio(
+        "ထုတ်မည့် PowerPoint ဘာသာစကား",
+        options=["မြန်မာဘာသာ (Myanmar)", "English"],
+        index=0,
+    )
 with c2:
-    mm_font = st.text_input("မြန်မာ PPT ဖောင့်အမည် (PowerPoint တွင် ဖွင့်ရန်)", value="Pyidaungsu")
+    slide_count = st.slider("ခန့်မှန်း Slide အရေအတွက်", min_value=4, max_value=20, value=8)
+with c3:
+    mm_font = st.text_input("မြန်မာ PPT ဖောင့်အမည်", value="Pyidaungsu")
+with c4:
+    selected_model = st.selectbox("ဦးစားပေး Gemini Model", options=MODEL_CANDIDATES, index=0)
 
 extra_note = st.text_area(
     "ထပ်မံထည့်သွင်းလိုသည့် ညွှန်ကြားချက် (Optional)",
@@ -209,13 +249,13 @@ extra_note = st.text_area(
     height=85,
 )
 
-if st.button("🚀 မြန်မာ + English PowerPoint ၂ ဖိုင် ထုတ်မည်", type="primary", use_container_width=True):
+if st.button("🚀 PowerPoint ထုတ်မည်", type="primary", use_container_width=True):
     if not api_key:
         st.error("Gemini API Key ထည့်သွင်းရန် လိုအပ်ပါသည်။")
     elif not uploaded_files:
         st.error("PDF သို့မဟုတ် Word ဖိုင် အနည်းဆုံးတစ်ခု Upload တင်ပါ။")
     else:
-        with st.spinner("ဖိုင်များကို ဖတ်ရှုပြီး မြန်မာ နှင့် English PowerPoint ဖိုင်များ ပြုစုနေပါသည်..."):
+        with st.spinner("ဖိုင်များကို ဖတ်ရှုပြီး PowerPoint ဖိုင် ပြုစုနေပါသည်..."):
             try:
                 extracted_chunks = []
                 for f in uploaded_files:
@@ -229,54 +269,41 @@ if st.button("🚀 မြန်မာ + English PowerPoint ၂ ဖိုင် �
                 if not combined_text:
                     st.warning("တင်ထားသော ဖိုင်များထဲမှ စာသား ရှာမတွေ့ပါ (Scanned PDF ပုံများသာ ဖြစ်နေနိုင်ပါသည်)။")
                 else:
-                    slide_data = generate_bilingual_slides_json(
+                    slides = generate_slides_json(
                         api_key=api_key,
                         source_text=combined_text,
                         slide_count=slide_count,
+                        language_choice=language_choice,
                         extra_note=extra_note,
+                        preferred_model=selected_model,
                     )
-                    mm_slides = slide_data.get("myanmar", [])
-                    en_slides = slide_data.get("english", [])
 
-                    mm_pptx_bytes = build_pptx_bytes(mm_slides, font_name=mm_font.strip() or "Pyidaungsu")
-                    en_pptx_bytes = build_pptx_bytes(en_slides, font_name="Calibri")
+                    is_mm = language_choice == "မြန်မာဘာသာ (Myanmar)"
+                    font_to_use = (mm_font.strip() or "Pyidaungsu") if is_mm else "Calibri"
+                    file_name = "presentation_myanmar.pptx" if is_mm else "presentation_english.pptx"
 
-                    st.session_state["mm_slides"] = mm_slides
-                    st.session_state["en_slides"] = en_slides
-                    st.session_state["mm_pptx"] = mm_pptx_bytes
-                    st.session_state["en_pptx"] = en_pptx_bytes
-                    st.success("မြန်မာ နှင့် English PowerPoint ဖိုင် ၂ ခု ထုတ်ပြီးပါပြီ။")
+                    pptx_bytes = build_pptx_bytes(slides, font_name=font_to_use)
+
+                    st.session_state["slides_result"] = slides
+                    st.session_state["pptx_bytes"] = pptx_bytes
+                    st.session_state["pptx_filename"] = file_name
+                    st.session_state["pptx_lang_label"] = language_choice
+                    st.success(f"{language_choice} PowerPoint ဖိုင် ထုတ်ပြီးပါပြီ။")
             except Exception as e:
                 st.error(f"Error ဖြစ်ပွားခဲ့ပါသည်: {e}")
 
-if "mm_pptx" in st.session_state and "en_pptx" in st.session_state:
+if "pptx_bytes" in st.session_state and "slides_result" in st.session_state:
     st.divider()
-    dl1, dl2 = st.columns(2)
-    with dl1:
-        st.download_button(
-            label="⬇️ မြန်မာ PowerPoint (.pptx) ဒေါင်းလုဒ်ဆွဲရန်",
-            data=st.session_state["mm_pptx"],
-            file_name="presentation_myanmar.pptx",
-            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            use_container_width=True,
-        )
-    with dl2:
-        st.download_button(
-            label="⬇️ English PowerPoint (.pptx) ဒေါင်းလုဒ်ဆွဲရန်",
-            data=st.session_state["en_pptx"],
-            file_name="presentation_english.pptx",
-            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            use_container_width=True,
-        )
+    st.download_button(
+        label=f"⬇️ {st.session_state.get('pptx_lang_label', '')} PowerPoint (.pptx) ဒေါင်းလုဒ်ဆွဲရန်",
+        data=st.session_state["pptx_bytes"],
+        file_name=st.session_state.get("pptx_filename", "presentation.pptx"),
+        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        use_container_width=True,
+    )
 
-    tab_mm, tab_en = st.tabs(["🇲🇲 မြန်မာ Slides Preview", "🇬🇧 English Slides Preview"])
-    with tab_mm:
-        for i, s in enumerate(st.session_state.get("mm_slides", []), start=1):
-            st.markdown(f"**Slide {i}: {s.get('title', '')}**")
-            for b in s.get("bullets", []):
-                st.markdown(f"- {b}")
-    with tab_en:
-        for i, s in enumerate(st.session_state.get("en_slides", []), start=1):
-            st.markdown(f"**Slide {i}: {s.get('title', '')}**")
-            for b in s.get("bullets", []):
-                st.markdown(f"- {b}")
+    st.subheader(f"📝 Slides Preview ({st.session_state.get('pptx_lang_label', '')})")
+    for i, s in enumerate(st.session_state.get("slides_result", []), start=1):
+        st.markdown(f"**Slide {i}: {s.get('title', '')}**")
+        for b in s.get("bullets", []):
+            st.markdown(f"- {b}")
