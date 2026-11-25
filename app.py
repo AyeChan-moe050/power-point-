@@ -19,6 +19,8 @@ st.set_page_config(
 st.title("📊 PDF / Word မှ PowerPoint ထုတ်ပေးသည့် စနစ်")
 st.caption("PDF နှင့် Word (.docx) ဖိုင်များကို တင်ပြီး မြန်မာ (သို့မဟုတ်) English PowerPoint ၁ ဖိုင် ရွေးချယ်ထုတ်ယူပါ။")
 
+EXCLUDED_KEYWORDS = ("image", "audio", "embedding", "veo", "imagen", "omni", "tts", "live")
+
 
 def get_api_key() -> str:
     if "GEMINI_API_KEY" in st.secrets:
@@ -28,20 +30,29 @@ def get_api_key() -> str:
     return st.sidebar.text_input("Gemini API Key ထည့်ပါ", type="password")
 
 
+def is_suitable_text_model(model_id: str) -> bool:
+    low = model_id.lower()
+    if "gemini" not in low:
+        return False
+    if any(k in low for k in EXCLUDED_KEYWORDS):
+        return False
+    return True
+
+
 @st.cache_data(ttl=600, show_spinner=False)
-def list_available_gemini_models(api_key: str) -> list[str]:
+def list_text_gemini_models(api_key: str) -> list[str]:
     client = genai.Client(api_key=api_key)
     models = []
     for m in client.models.list():
         name = getattr(m, "name", "") or ""
         short_name = name.replace("models/", "")
         actions = getattr(m, "supported_actions", None) or []
-        if "generateContent" in actions or not actions:
-            if "gemini" in short_name and short_name not in models:
+        if ("generateContent" in actions or not actions) and is_suitable_text_model(short_name):
+            if short_name not in models:
                 models.append(short_name)
-    # gemini-3.8-flash ကို ဦးစားပေး အပေါ်ဆုံးမှာ ထားရန်
-    models.sort(key=lambda x: (0 if "3.8" in x else 1 if "flash" in x else 2, x))
-    return models or ["gemini-3.8-flash"]
+
+    models.sort(key=lambda x: (0 if "flash" in x else 1, x))
+    return models or ["gemini-3.8-flash", "gemini-2.5-flash"]
 
 
 def extract_docx_text(uploaded_file) -> str:
@@ -76,9 +87,10 @@ def generate_slides_json(
     language_choice: str,
     extra_note: str,
     model_name: str,
+    max_chars: int = 15000,
 ) -> list[dict]:
     client = genai.Client(api_key=api_key)
-    trimmed_text = source_text[:30000]
+    trimmed_text = source_text[:max_chars]
 
     if language_choice == "မြန်မာဘာသာ (Myanmar)":
         lang_instruction = (
@@ -127,7 +139,7 @@ def generate_slides_json(
     }
 
     last_err = None
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             response = client.models.generate_content(
                 model=model_name,
@@ -143,8 +155,8 @@ def generate_slides_json(
         except Exception as exc:
             last_err = exc
             err_str = str(exc)
-            if ("503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str) and attempt < 2:
-                time.sleep(2 * (attempt + 1))
+            if ("503" in err_str or "UNAVAILABLE" in err_str) and attempt == 0:
+                time.sleep(2)
                 continue
             raise
 
@@ -212,10 +224,10 @@ def build_pptx_bytes(slides: list[dict], font_name: str) -> bytes:
 
 api_key = get_api_key()
 
-model_options = ["gemini-3.8-flash"]
+model_options = ["gemini-3.8-flash", "gemini-2.5-flash"]
 if api_key:
     try:
-        model_options = list_available_gemini_models(api_key)
+        model_options = list_text_gemini_models(api_key)
     except Exception:
         pass
 
@@ -233,17 +245,11 @@ with c1:
         index=0,
     )
 with c2:
-    slide_count = st.slider("ခန့်မှန်း Slide အရေအတွက်", min_value=4, max_value=20, value=6)
+    slide_count = st.slider("ခန့်မှန်း Slide အရေအတွက်", min_value=4, max_value=15, value=5)
 with c3:
     mm_font = st.text_input("မြန်မာ PPT ဖောင့်အမည်", value="Pyidaungsu")
 with c4:
     selected_model = st.selectbox("Gemini Model ရွေးရန်", options=model_options, index=0)
-
-custom_model = st.text_input(
-    "Model အမည် ကိုယ်တိုင်ရိုက်ထည့်လိုပါက (မထည့်ပါက အပေါ်က ရွေးထားတာကို သုံးပါမည်)",
-    placeholder="ဥပမာ - gemini-3.8-flash",
-)
-active_model = custom_model.strip() or selected_model
 
 extra_note = st.text_area(
     "ထပ်မံထည့်သွင်းလိုသည့် ညွှန်ကြားချက် (Optional)",
@@ -257,7 +263,7 @@ if st.button("🚀 PowerPoint ထုတ်မည်", type="primary", use_contai
     elif not uploaded_files:
         st.error("PDF သို့မဟုတ် Word ဖိုင် အနည်းဆုံးတစ်ခု Upload တင်ပါ။")
     else:
-        with st.spinner(f"'{active_model}' ဖြင့် PowerPoint ဖိုင် ပြုစုနေပါသည်..."):
+        with st.spinner(f"'{selected_model}' ဖြင့် PowerPoint ဖိုင် ပြုစုနေပါသည်..."):
             try:
                 extracted_chunks = []
                 for f in uploaded_files:
@@ -277,7 +283,7 @@ if st.button("🚀 PowerPoint ထုတ်မည်", type="primary", use_contai
                         slide_count=slide_count,
                         language_choice=language_choice,
                         extra_note=extra_note,
-                        model_name=active_model,
+                        model_name=selected_model,
                     )
 
                     is_mm = language_choice == "မြန်မာဘာသာ (Myanmar)"
