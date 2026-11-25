@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import time
 import streamlit as st
 from docx import Document
 from google import genai
@@ -107,17 +108,26 @@ def generate_bilingual_slides_json(
         "required": ["myanmar", "english"],
     }
 
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=response_schema,
-        ),
-    )
-
-    raw_text = response.text or "{}"
-    return json.loads(raw_text)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.8-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=response_schema,
+                ),
+            )
+            raw_text = response.text or "{}"
+            return json.loads(raw_text)
+        except Exception as exc:
+            err_str = str(exc)
+            is_transient = ("503" in err_str) or ("UNAVAILABLE" in err_str) or ("429" in err_str)
+            if is_transient and attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise
 
 
 def build_pptx_bytes(slides: list[dict], font_name: str) -> bytes:
