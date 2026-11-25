@@ -22,8 +22,12 @@ st.set_page_config(
 st.title("📊 PDF / Word မှ PowerPoint ထုတ်ပေးသည့် စနစ်")
 st.caption("PDF နှင့် Word (.docx) ဖိုင်များကို တင်ပြီး Template ပုံစံ ရွေးချယ်ကာ PowerPoint (.pptx) ဖိုင် ထုတ်ယူပါ။")
 
-EXCLUDED_KEYWORDS = ("image", "audio", "embedding", "veo", "imagen", "omni", "tts", "live")
-FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+MODEL_OPTIONS = [
+    "gemini-3.8-flash",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
 
 TEMPLATES = {
     "Cyber Dark Cards": {
@@ -88,35 +92,6 @@ def get_api_key() -> str:
     return st.sidebar.text_input("Gemini API Key ထည့်ပါ", type="password").strip()
 
 
-def is_suitable_text_model(model_id: str) -> bool:
-    low = model_id.lower()
-    if "gemini" not in low:
-        return False
-    if any(k in low for k in EXCLUDED_KEYWORDS):
-        return False
-    return True
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def list_text_gemini_models(api_key: str) -> list[str]:
-    try:
-        client = genai.Client(api_key=api_key)
-        models = []
-        for m in client.models.list():
-            name = getattr(m, "name", "") or ""
-            short_name = name.replace("models/", "")
-            actions = getattr(m, "supported_actions", None) or []
-            if ("generateContent" in actions or not actions) and is_suitable_text_model(short_name):
-                if short_name not in models:
-                    models.append(short_name)
-        if models:
-            models.sort(key=lambda x: (0 if "flash" in x else 1, x))
-            return models
-    except Exception:
-        pass
-    return FALLBACK_MODELS
-
-
 def detect_slide_icon_and_tag(title: str, bullets: list[str], idx: int, total: int) -> tuple[str, str]:
     text = f"{title} {' '.join(bullets)}".lower()
     if idx == 0:
@@ -155,168 +130,3 @@ def extract_pdf_text(uploaded_file) -> str:
     reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
     parts = [f"=== PDF ဖိုင်: {uploaded_file.name} ==="]
     for page_num, page in enumerate(reader.pages, start=1):
-        txt = (page.extract_text() or "").strip()
-        if txt:
-            parts.append(f"--- စာမျက်နှာ {page_num} ---\n{txt}")
-    return "\n\n".join(parts)
-
-
-def generate_slides_json(
-    api_key: str,
-    source_text: str,
-    slide_count: int,
-    language_choice: str,
-    extra_note: str,
-    model_name: str,
-    max_chars: int = 15000,
-) -> list[dict]:
-    client = genai.Client(api_key=api_key)
-    trimmed_text = source_text[:max_chars]
-
-    if language_choice == "မြန်မာဘာသာ (Myanmar)":
-        lang_instruction = (
-            "Slide များ၏ title နှင့် bullets အားလုံးကို **မြန်မာဘာသာ** သီးသန့်ဖြင့် ရှင်းလင်းတိုတုတ်စွာ ရေးပါ "
-            "(Slide တစ်ခုလျှင် bullet ၃ မှ ၄ ချက်ခန့်၊ ကျစ်လျစ်စွာ ရေးပါ)။"
-        )
-    else:
-        lang_instruction = (
-            "Write all slide titles and bullet points strictly in **English**, concise and clear "
-            "(around 3 to 4 bullet points per slide)."
-        )
-
-    prompt = f"""
-သင်သည် အစိုးရဌာန/အဖွဲ့အစည်းများနှင့် ပရော်ဖက်ရှင်နယ် တင်ပြချက်များအတွက် PowerPoint presentation ဖွဲ့စည်းပုံကို စနစ်တကျ ရေးသားပေးနိုင်သော ကျွမ်းကျင်သူတစ်ဦး ဖြစ်သည်။
-
-ပေးထားသော PDF / Word စာရွက်စာတမ်းများမှ အဓိက အချက်အလက်များကို အခြေခံ၍ Slide အရေအတွက် ခန့်မှန်းခြေ {slide_count} slides ခန့် ပါဝင်သော PowerPoint outline ကို ပြုစုပေးပါ။
-
-### လိုက်နာရမည့် စည်းကမ်းများ
-1. {lang_instruction}
-2. ပထမဆုံး Slide သည် Presentation ခေါင်းစဉ် (Title Slide) ဖြစ်သင့်ပြီး နောက်ဆုံး Slide သည် နိဂုံး/အနှစ်ချုပ် (Summary / Conclusion) ဖြစ်သင့်သည်။
-3. Source text ထဲတွင် မပါဝင်သော နေ့ရက်၊ ကိန်းဂဏန်း၊ အမည်များကို မတီထွင်ပါနှင့်။
-
-### ထပ်မံမှာကြားချက် (ရှိပါက)
-{extra_note.strip() if extra_note.strip() else "မရှိပါ"}
-
-### စာရွက်စာတမ်းများမှ ထုတ်ယူထားသော အချက်အလက်များ
-{trimmed_text}
-""".strip()
-
-    response_schema = {
-        "type": "OBJECT",
-        "properties": {
-            "slides": {
-                "type": "ARRAY",
-                "items": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "title": {"type": "STRING"},
-                        "bullets": {"type": "ARRAY", "items": {"type": "STRING"}},
-                    },
-                    "required": ["title", "bullets"],
-                },
-            }
-        },
-        "required": ["slides"],
-    }
-
-    last_err = None
-    for attempt in range(2):
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=response_schema,
-                ),
-            )
-            raw_text = response.text or "{}"
-            result = json.loads(raw_text)
-            return result.get("slides", [])
-        except Exception as exc:
-            last_err = exc
-            err_str = str(exc)
-            if ("503" in err_str or "UNAVAILABLE" in err_str) and attempt == 0:
-                time.sleep(2)
-                continue
-            raise
-
-    raise RuntimeError(f"Error: {last_err}")
-
-
-def _set_run_font(run, font_name: str, size_pt: int, color: RGBColor, bold: bool = False):
-    run.font.name = font_name
-    run.font.size = Pt(size_pt)
-    run.font.color.rgb = color
-    run.font.bold = bold
-
-
-def build_styled_pptx_bytes(
-    slides: list[dict],
-    font_name: str,
-    template_name: str,
-    template_file=None,
-) -> bytes:
-    tpl = TEMPLATES.get(template_name, TEMPLATES["Cyber Dark Cards"])
-    style = tpl["style"]
-    blank_layout_idx = 6
-
-    if template_file is not None:
-        prs = Presentation(io.BytesIO(template_file.getvalue()))
-        if len(prs.slide_layouts) <= blank_layout_idx:
-            blank_layout_idx = len(prs.slide_layouts) - 1
-    else:
-        prs = Presentation()
-        prs.slide_width = Inches(13.333)
-        prs.slide_height = Inches(7.5)
-
-    total_slides = len(slides)
-
-    for idx, slide_data in enumerate(slides):
-        title_text = str(slide_data.get("title", "")).strip()
-        bullets = [str(b).strip() for b in slide_data.get("bullets", []) if str(b).strip()]
-        icon_emoji, tag_label = detect_slide_icon_and_tag(title_text, bullets, idx, total_slides)
-
-        layout = prs.slide_layouts[min(blank_layout_idx, len(prs.slide_layouts) - 1)]
-        slide = prs.slides.add_slide(layout)
-
-        if template_file is None:
-            bg_fill = slide.background.fill
-            bg_fill.solid()
-            bg_fill.fore_color.rgb = tpl["bg"]
-
-        if style == "split":
-            # Left sidebar panel
-            sidebar = slide.shapes.add_shape(
-                MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(3.2), Inches(7.5)
-            )
-            sidebar.fill.solid()
-            sidebar.fill.fore_color.rgb = tpl["side_bg"]
-            sidebar.line.fill.background()
-
-            side_tag = slide.shapes.add_textbox(Inches(0.3), Inches(0.6), Inches(2.6), Inches(1.2))
-            st_tf = side_tag.text_frame
-            st_tf.word_wrap = True
-            sp = st_tf.paragraphs[0]
-            sp.alignment = PP_ALIGN.LEFT
-            srun = sp.add_run()
-            srun.text = f"{icon_emoji}\n{tag_label}"
-            _set_run_font(srun, font_name, 16, tpl["accent"], bold=True)
-
-            title_box = slide.shapes.add_textbox(Inches(3.55), Inches(0.5), Inches(9.2), Inches(1.15))
-            t_tf = title_box.text_frame
-            t_tf.word_wrap = True
-            tp = t_tf.paragraphs[0]
-            tp.alignment = PP_ALIGN.LEFT
-            trun = tp.add_run()
-            trun.text = title_text
-            _set_run_font(trun, font_name, 26 if idx > 0 else 30, tpl["title"], bold=True)
-
-            line = slide.shapes.add_shape(
-                MSO_SHAPE.RECTANGLE, Inches(3.55), Inches(1.72), Inches(9.2), Inches(0.03)
-            )
-            line.fill.solid()
-            line.fill.fore_color.rgb = tpl["accent"]
-            line.line.fill.background()
-
-            card = slide
