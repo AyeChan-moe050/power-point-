@@ -7,6 +7,9 @@ from docx import Document
 from google import genai
 from google.genai import types
 from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 from pypdf import PdfReader
 
@@ -17,9 +20,45 @@ st.set_page_config(
 )
 
 st.title("📊 PDF / Word မှ PowerPoint ထုတ်ပေးသည့် စနစ်")
-st.caption("PDF နှင့် Word (.docx) ဖိုင်များကို တင်ပြီး မြန်မာ (သို့မဟုတ်) English PowerPoint ၁ ဖိုင် ရွေးချယ်ထုတ်ယူပါ။")
+st.caption("PDF နှင့် Word (.docx) ဖိုင်များကို တင်ပြီး Theme, Icon Tag များဖြင့် လှပသော PowerPoint (.pptx) ဖိုင် ထုတ်ယူပါ။")
 
 EXCLUDED_KEYWORDS = ("image", "audio", "embedding", "veo", "imagen", "omni", "tts", "live")
+
+THEMES = {
+    "Cyber Security (Dark)": {
+        "bg": RGBColor(15, 23, 42),          # Slate 900
+        "card_bg": RGBColor(30, 41, 59),     # Slate 800
+        "header_bg": RGBColor(2, 6, 23),     # Slate 950
+        "title": RGBColor(248, 250, 252),    # White-ish
+        "body": RGBColor(226, 232, 240),     # Light slate
+        "muted": RGBColor(148, 163, 184),    # Muted slate
+        "accent": RGBColor(56, 189, 248),    # Sky 400
+        "badge_bg": RGBColor(239, 68, 68),   # Red 500
+        "badge_fg": RGBColor(255, 255, 255),
+    },
+    "Corporate Navy (Light)": {
+        "bg": RGBColor(248, 250, 252),       # Light background
+        "card_bg": RGBColor(255, 255, 255),  # White card
+        "header_bg": RGBColor(15, 23, 42),   # Dark navy banner
+        "title": RGBColor(15, 23, 42),
+        "body": RGBColor(30, 41, 59),
+        "muted": RGBColor(100, 116, 139),
+        "accent": RGBColor(2, 132, 199),     # Sky 600
+        "badge_bg": RGBColor(217, 119, 6),   # Amber 600
+        "badge_fg": RGBColor(255, 255, 255),
+    },
+    "Modern Teal (Light)": {
+        "bg": RGBColor(240, 253, 250),
+        "card_bg": RGBColor(255, 255, 255),
+        "header_bg": RGBColor(19, 78, 74),
+        "title": RGBColor(19, 78, 74),
+        "body": RGBColor(31, 41, 55),
+        "muted": RGBColor(75, 85, 99),
+        "accent": RGBColor(13, 148, 136),
+        "badge_bg": RGBColor(15, 118, 110),
+        "badge_fg": RGBColor(255, 255, 255),
+    },
+}
 
 
 def get_api_key() -> str:
@@ -53,6 +92,25 @@ def list_text_gemini_models(api_key: str) -> list[str]:
 
     models.sort(key=lambda x: (0 if "flash" in x else 1, x))
     return models or ["gemini-3.8-flash", "gemini-2.5-flash"]
+
+
+def detect_slide_icon_and_tag(title: str, bullets: list[str], idx: int, total: int) -> tuple[str, str]:
+    text = f"{title} {' '.join(bullets)}".lower()
+    if idx == 0:
+        return "🛡️", "OVERVIEW"
+    if idx == total - 1 and any(w in text for w in ("summary", "conclusion", "နိဂုံး", "အနှစ်ချုပ်", "recommendation", "အကြံပြု")):
+        return "✅", "SUMMARY"
+    if any(w in text for w in ("vpn", "phishing", "link", "email", "အတုအယောင်", "လင့်ခ်", "အီးမေးလ်")):
+        return "🎣", "PHISHING / VPN"
+    if any(w in text for w in ("malware", "installer", "infect", "ကူးစက်", "ထည့်သွင်း", "trojan", "ransomware")):
+        return "🦠", "MALWARE"
+    if any(w in text for w in ("persistence", "registry", "scheduled task", "c2", "command and control", "server", "ဆက်သွယ်")):
+        return "⚙️", "PERSISTENCE / C2"
+    if any(w in text for w in ("ioc", "hash", "indicator", "အမှတ်အသား", "သံသယ")):
+        return "🔍", "IoCs"
+    if any(w in text for w in ("credential", "password", "access", "account", "အကောင့်", "ဝင်ရောက်")):
+        return "🔐", "ACCESS / CREDENTIALS"
+    return "📌", f"SLIDE {idx + 1:02d}"
 
 
 def extract_docx_text(uploaded_file) -> str:
@@ -163,59 +221,129 @@ def generate_slides_json(
     raise RuntimeError(f"Error: {last_err}")
 
 
-def build_pptx_bytes(slides: list[dict], font_name: str) -> bytes:
-    prs = Presentation()
-    prs.slide_width = Inches(13.333)
-    prs.slide_height = Inches(7.5)
+def _set_run_font(run, font_name: str, size_pt: int, color: RGBColor, bold: bool = False):
+    run.font.name = font_name
+    run.font.size = Pt(size_pt)
+    run.font.color.rgb = color
+    run.font.bold = bold
+
+
+def build_styled_pptx_bytes(
+    slides: list[dict],
+    font_name: str,
+    theme_name: str,
+    template_file=None,
+) -> bytes:
+    theme = THEMES.get(theme_name, THEMES["Cyber Security (Dark)"])
+    blank_layout_idx = 6
+
+    if template_file is not None:
+        prs = Presentation(io.BytesIO(template_file.getvalue()))
+        if len(prs.slide_layouts) <= blank_layout_idx:
+            blank_layout_idx = len(prs.slide_layouts) - 1
+    else:
+        prs = Presentation()
+        prs.slide_width = Inches(13.333)
+        prs.slide_height = Inches(7.5)
+
+    total_slides = len(slides)
 
     for idx, slide_data in enumerate(slides):
         title_text = str(slide_data.get("title", "")).strip()
         bullets = [str(b).strip() for b in slide_data.get("bullets", []) if str(b).strip()]
+        icon_emoji, tag_label = detect_slide_icon_and_tag(title_text, bullets, idx, total_slides)
 
-        if idx == 0:
-            layout = prs.slide_layouts[0]
-            slide = prs.slides.add_slide(layout)
-            if slide.shapes.title:
-                slide.shapes.title.text = title_text
-                for p in slide.shapes.title.text_frame.paragraphs:
-                    for r in p.runs:
-                        r.font.name = font_name
-                        r.font.size = Pt(36)
-            if len(slide.placeholders) > 1 and slide.placeholders[1].has_text_frame:
-                sub_tf = slide.placeholders[1].text_frame
-                sub_tf.clear()
-                for i, b in enumerate(bullets[:3]):
-                    p = sub_tf.paragraphs[0] if i == 0 else sub_tf.add_paragraph()
-                    p.text = b
-                    for r in p.runs:
-                        r.font.name = font_name
-                        r.font.size = Pt(20)
-        else:
-            layout = prs.slide_layouts[1]
-            slide = prs.slides.add_slide(layout)
-            if slide.shapes.title:
-                slide.shapes.title.text = title_text
-                for p in slide.shapes.title.text_frame.paragraphs:
-                    for r in p.runs:
-                        r.font.name = font_name
-                        r.font.size = Pt(28)
+        layout = prs.slide_layouts[min(blank_layout_idx, len(prs.slide_layouts) - 1)]
+        slide = prs.slides.add_slide(layout)
 
-            body_placeholder = None
-            for shape in slide.placeholders:
-                if shape.placeholder_format.idx == 1 and shape.has_text_frame:
-                    body_placeholder = shape
-                    break
+        # Background fill if not using custom template
+        if template_file is None:
+            bg_fill = slide.background.fill
+            bg_fill.solid()
+            bg_fill.fore_color.rgb = theme["bg"]
 
-            if body_placeholder:
-                tf = body_placeholder.text_frame
-                tf.clear()
-                for i, b in enumerate(bullets):
-                    p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-                    p.text = b
-                    p.level = 0
-                    for r in p.runs:
-                        r.font.name = font_name
-                        r.font.size = Pt(20)
+        # Top accent bar
+        top_bar = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.12)
+        )
+        top_bar.fill.solid()
+        top_bar.fill.fore_color.rgb = theme["accent"]
+        top_bar.line.fill.background()
+
+        # Icon badge pill on top-left
+        badge = slide.shapes.add_shape(
+            MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.65), Inches(0.38), Inches(2.55), Inches(0.45)
+        )
+        badge.fill.solid()
+        badge.fill.fore_color.rgb = theme["badge_bg"]
+        badge.line.fill.background()
+        b_tf = badge.text_frame
+        b_tf.word_wrap = True
+        b_tf.margin_left = Inches(0.12)
+        b_tf.margin_right = Inches(0.12)
+        b_tf.margin_top = Inches(0.04)
+        b_tf.margin_bottom = Inches(0.04)
+        bp = b_tf.paragraphs[0]
+        bp.alignment = PP_ALIGN.CENTER
+        brun = bp.add_run()
+        brun.text = f"{icon_emoji}  {tag_label}"
+        _set_run_font(brun, font_name, 12, theme["badge_fg"], bold=True)
+
+        # Slide Title
+        title_box = slide.shapes.add_textbox(Inches(0.65), Inches(0.95), Inches(12.0), Inches(0.95))
+        t_tf = title_box.text_frame
+        t_tf.word_wrap = True
+        tp = t_tf.paragraphs[0]
+        trun = tp.add_run()
+        trun.text = f"{icon_emoji} {title_text}"
+        _set_run_font(trun, font_name, 26 if idx > 0 else 32, theme["title"], bold=True)
+
+        # Divider line under title
+        line = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE, Inches(0.65), Inches(1.95), Inches(12.03), Inches(0.03)
+        )
+        line.fill.solid()
+        line.fill.fore_color.rgb = theme["accent"]
+        line.line.fill.background()
+
+        # Content Card
+        card = slide.shapes.add_shape(
+            MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.65), Inches(2.15), Inches(12.03), Inches(4.65)
+        )
+        card.fill.solid()
+        card.fill.fore_color.rgb = theme["card_bg"]
+        card.line.color.rgb = theme["accent"]
+        card.line.width = Pt(1)
+
+        c_tf = card.text_frame
+        c_tf.word_wrap = True
+        c_tf.margin_left = Inches(0.35)
+        c_tf.margin_right = Inches(0.35)
+        c_tf.margin_top = Inches(0.28)
+        c_tf.margin_bottom = Inches(0.25)
+
+        if bullets:
+            for b_idx, b_text in enumerate(bullets):
+                p = c_tf.paragraphs[0] if b_idx == 0 else c_tf.add_paragraph()
+                p.space_after = Pt(12)
+                p.line_spacing = 1.25
+
+                dot_run = p.add_run()
+                dot_run.text = f"▸  "
+                _set_run_font(dot_run, font_name, 18, theme["accent"], bold=True)
+
+                txt_run = p.add_run()
+                txt_run.text = b_text
+                _set_run_font(txt_run, font_name, 18, theme["body"], bold=False)
+
+        # Footer with slide number
+        footer_box = slide.shapes.add_textbox(Inches(0.65), Inches(6.95), Inches(12.03), Inches(0.35))
+        f_tf = footer_box.text_frame
+        fp = f_tf.paragraphs[0]
+        fp.alignment = PP_ALIGN.RIGHT
+        frun = fp.add_run()
+        frun.text = f"Slide {idx + 1} / {total_slides}"
+        _set_run_font(frun, font_name, 11, theme["muted"], bold=False)
 
     out = io.BytesIO()
     prs.save(out)
@@ -231,87 +359,8 @@ if api_key:
     except Exception:
         pass
 
-uploaded_files = st.file_uploader(
-    "PDF (.pdf) သို့မဟုတ် Word (.docx) ဖိုင်များ တင်ပါ",
-    type=["pdf", "docx"],
-    accept_multiple_files=True,
-)
-
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    language_choice = st.radio(
-        "ထုတ်မည့် PowerPoint ဘာသာစကား",
-        options=["မြန်မာဘာသာ (Myanmar)", "English"],
-        index=0,
-    )
-with c2:
-    slide_count = st.slider("ခန့်မှန်း Slide အရေအတွက်", min_value=4, max_value=15, value=5)
-with c3:
-    mm_font = st.text_input("မြန်မာ PPT ဖောင့်အမည်", value="Pyidaungsu")
-with c4:
-    selected_model = st.selectbox("Gemini Model ရွေးရန်", options=model_options, index=0)
-
-extra_note = st.text_area(
-    "ထပ်မံထည့်သွင်းလိုသည့် ညွှန်ကြားချက် (Optional)",
-    placeholder="ဥပမာ - အစိုးရဌာန အစည်းအဝေး/သင်တန်း အနှစ်ချုပ်ပုံစံ၊ အဓိက အလေးပေးလိုသော အချက်များ...",
-    height=80,
-)
-
-if st.button("🚀 PowerPoint ထုတ်မည်", type="primary", use_container_width=True):
-    if not api_key:
-        st.error("Gemini API Key ထည့်သွင်းရန် လိုအပ်ပါသည်။")
-    elif not uploaded_files:
-        st.error("PDF သို့မဟုတ် Word ဖိုင် အနည်းဆုံးတစ်ခု Upload တင်ပါ။")
-    else:
-        with st.spinner(f"'{selected_model}' ဖြင့် PowerPoint ဖိုင် ပြုစုနေပါသည်..."):
-            try:
-                extracted_chunks = []
-                for f in uploaded_files:
-                    fname = f.name.lower()
-                    if fname.endswith(".pdf"):
-                        extracted_chunks.append(extract_pdf_text(f))
-                    elif fname.endswith(".docx"):
-                        extracted_chunks.append(extract_docx_text(f))
-
-                combined_text = "\n\n".join(extracted_chunks).strip()
-                if not combined_text:
-                    st.warning("တင်ထားသော ဖိုင်များထဲမှ စာသား ရှာမတွေ့ပါ (Scanned PDF ပုံများသာ ဖြစ်နေနိုင်ပါသည်)။")
-                else:
-                    slides = generate_slides_json(
-                        api_key=api_key,
-                        source_text=combined_text,
-                        slide_count=slide_count,
-                        language_choice=language_choice,
-                        extra_note=extra_note,
-                        model_name=selected_model,
-                    )
-
-                    is_mm = language_choice == "မြန်မာဘာသာ (Myanmar)"
-                    font_to_use = (mm_font.strip() or "Pyidaungsu") if is_mm else "Calibri"
-                    file_name = "presentation_myanmar.pptx" if is_mm else "presentation_english.pptx"
-
-                    pptx_bytes = build_pptx_bytes(slides, font_name=font_to_use)
-
-                    st.session_state["slides_result"] = slides
-                    st.session_state["pptx_bytes"] = pptx_bytes
-                    st.session_state["pptx_filename"] = file_name
-                    st.session_state["pptx_lang_label"] = language_choice
-                    st.success(f"{language_choice} PowerPoint ဖိုင် ထုတ်ပြီးပါပြီ။")
-            except Exception as e:
-                st.error(f"Error ဖြစ်ပွားခဲ့ပါသည်: {e}")
-
-if "pptx_bytes" in st.session_state and "slides_result" in st.session_state:
-    st.divider()
-    st.download_button(
-        label=f"⬇️ {st.session_state.get('pptx_lang_label', '')} PowerPoint (.pptx) ဒေါင်းလုဒ်ဆွဲရန်",
-        data=st.session_state["pptx_bytes"],
-        file_name=st.session_state.get("pptx_filename", "presentation.pptx"),
-        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        use_container_width=True,
-    )
-
-    st.subheader(f"📝 Slides Preview ({st.session_state.get('pptx_lang_label', '')})")
-    for i, s in enumerate(st.session_state.get("slides_result", []), start=1):
-        st.markdown(f"**Slide {i}: {s.get('title', '')}**")
-        for b in s.get("bullets", []):
-            st.markdown(f"- {b}")
+col_u1, col_u2 = st.columns([2, 1])
+with col_u1:
+    uploaded_files = st.file_uploader(
+        "PDF (.pdf) သို့မဟုတ် Word (.docx) ဖိုင်များ တင်ပါ",
+        type=["pdf
