@@ -22,11 +22,15 @@ st.set_page_config(
 st.title("📊 PDF / Word မှ PowerPoint ထုတ်ပေးသည့် စနစ်")
 st.caption("PDF နှင့် Word (.docx) ဖိုင်များကို တင်ပြီး Template ပုံစံ ရွေးချယ်ကာ PowerPoint (.pptx) ဖိုင် ထုတ်ယူပါ။")
 
-MODEL_OPTIONS = [
+DEFAULT_MODELS = [
     "gemini-3.8-flash",
+    "gemini-3.8-pro",
+    "gemini-3-flash-preview",
+    "gemini-3-pro-preview",
     "gemini-2.5-flash",
+    "gemini-2.5-pro",
     "gemini-2.0-flash",
-    "gemini-1.5-flash",
+    "gemini-2.0-flash-lite",
 ]
 
 TEMPLATES = {
@@ -90,6 +94,20 @@ def get_api_key() -> str:
     if os.environ.get("GEMINI_API_KEY"):
         return os.environ["GEMINI_API_KEY"].strip()
     return st.sidebar.text_input("Gemini API Key ထည့်ပါ", type="password").strip()
+
+
+def fetch_all_gemini_models(api_key: str) -> list[str]:
+    client = genai.Client(api_key=api_key)
+    models = []
+    for m in client.models.list():
+        name = getattr(m, "name", "") or ""
+        short_name = name.replace("models/", "")
+        if "gemini" in short_name.lower() and short_name not in models:
+            models.append(short_name)
+    for dm in DEFAULT_MODELS:
+        if dm not in models:
+            models.append(dm)
+    return models
 
 
 def detect_slide_icon_and_tag(title: str, bullets: list[str], idx: int, total: int) -> tuple[str, str]:
@@ -513,6 +531,9 @@ def build_styled_pptx_bytes(
 
 api_key = get_api_key()
 
+if "model_list" not in st.session_state:
+    st.session_state["model_list"] = list(DEFAULT_MODELS)
+
 col_u1, col_u2 = st.columns([2, 1])
 with col_u1:
     uploaded_files = st.file_uploader(
@@ -541,7 +562,20 @@ with c3:
 with c4:
     mm_font = st.text_input("မြန်မာ PPT ဖောင့်", value="Pyidaungsu")
 with c5:
-    selected_model = st.selectbox("Gemini Model", options=MODEL_OPTIONS, index=0)
+    selected_model = st.selectbox("Gemini Model", options=st.session_state["model_list"], index=0)
+    if st.button("🔄 Model အားလုံး ရှာမည်", use_container_width=True):
+        if api_key:
+            try:
+                st.session_state["model_list"] = fetch_all_gemini_models(api_key)
+                st.rerun()
+            except Exception as err:
+                st.warning(f"Model စာရင်း ရှာမရပါ: {err}")
+
+custom_model_input = st.text_input(
+    "Model အမည် ကိုယ်တိုင်ရိုက်ထည့်လိုပါက (မထည့်ပါက အပေါ်က ရွေးထားတာကို သုံးပါမည်)",
+    placeholder="ဥပမာ - gemini-3.8-flash",
+)
+active_model = custom_model_input.strip() or selected_model
 
 extra_note = st.text_area(
     "ထပ်မံထည့်သွင်းလိုသည့် ညွှန်ကြားချက် (Optional)",
@@ -555,7 +589,7 @@ if st.button("🎨 လှပသော PowerPoint ထုတ်မည်", type="p
     elif not uploaded_files:
         st.error("PDF သို့မဟုတ် Word ဖိုင် အနည်းဆုံးတစ်ခု Upload တင်ပါ။")
     else:
-        with st.spinner(f"'{selected_model}' ဖြင့် Slide များနှင့် '{template_choice}' Template ပြုစုနေပါသည်..."):
+        with st.spinner(f"'{active_model}' ဖြင့် Slide များနှင့် '{template_choice}' Template ပြုစုနေပါသည်..."):
             try:
                 extracted_chunks = []
                 for f in uploaded_files:
@@ -575,7 +609,7 @@ if st.button("🎨 လှပသော PowerPoint ထုတ်မည်", type="p
                         slide_count=slide_count,
                         language_choice=language_choice,
                         extra_note=extra_note,
-                        model_name=selected_model,
+                        model_name=active_model,
                     )
 
                     is_mm = language_choice == "မြန်မာဘာသာ (Myanmar)"
