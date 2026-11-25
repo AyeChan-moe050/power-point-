@@ -22,8 +22,12 @@ st.set_page_config(
 st.title("📊 PDF / Word မှ PowerPoint ထုတ်ပေးသည့် စနစ်")
 st.caption("PDF နှင့် Word (.docx) ဖိုင်များကို တင်ပြီး Template ပုံစံ ရွေးချယ်ကာ PowerPoint (.pptx) ဖိုင် ထုတ်ယူပါ။")
 
-EXCLUDED_KEYWORDS = ("image", "audio", "embedding", "veo", "imagen", "omni", "tts", "live")
-FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+MODEL_OPTIONS = [
+    "gemini-3.8-flash",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
 
 TEMPLATES = {
     "Cyber Dark Cards": {
