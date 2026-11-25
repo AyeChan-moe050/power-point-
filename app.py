@@ -20,16 +20,17 @@ st.set_page_config(
 )
 
 st.title("📊 PDF / Word မှ PowerPoint ထုတ်ပေးသည့် စနစ်")
-st.caption("PDF နှင့် Word (.docx) ဖိုင်များကို တင်ပြီး Theme, Icon Tag များဖြင့် လှပသော PowerPoint (.pptx) ဖိုင် ထုတ်ယူပါ။")
+st.caption("PDF နှင့် Word (.docx) ဖိုင်များကို တင်ပြီး Template ပုံစံ ရွေးချယ်ကာ PowerPoint (.pptx) ဖိုင် ထုတ်ယူပါ။")
 
 EXCLUDED_KEYWORDS = ("image", "audio", "embedding", "veo", "imagen", "omni", "tts", "live")
 FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
 
-THEMES = {
-    "Cyber Security (Dark)": {
+TEMPLATES = {
+    "Cyber Dark Cards": {
+        "style": "cards",
         "bg": RGBColor(15, 23, 42),
         "card_bg": RGBColor(30, 41, 59),
-        "header_bg": RGBColor(2, 6, 23),
+        "side_bg": RGBColor(2, 6, 23),
         "title": RGBColor(248, 250, 252),
         "body": RGBColor(226, 232, 240),
         "muted": RGBColor(148, 163, 184),
@@ -37,26 +38,40 @@ THEMES = {
         "badge_bg": RGBColor(239, 68, 68),
         "badge_fg": RGBColor(255, 255, 255),
     },
-    "Corporate Navy (Light)": {
+    "Clean Left-Accent (Light)": {
+        "style": "left_accent",
         "bg": RGBColor(248, 250, 252),
         "card_bg": RGBColor(255, 255, 255),
-        "header_bg": RGBColor(15, 23, 42),
+        "side_bg": RGBColor(2, 132, 199),
         "title": RGBColor(15, 23, 42),
         "body": RGBColor(30, 41, 59),
         "muted": RGBColor(100, 116, 139),
         "accent": RGBColor(2, 132, 199),
+        "badge_bg": RGBColor(14, 116, 144),
+        "badge_fg": RGBColor(255, 255, 255),
+    },
+    "Executive Split": {
+        "style": "split",
+        "bg": RGBColor(241, 245, 249),
+        "card_bg": RGBColor(255, 255, 255),
+        "side_bg": RGBColor(15, 23, 42),
+        "title": RGBColor(15, 23, 42),
+        "body": RGBColor(30, 41, 59),
+        "muted": RGBColor(100, 116, 139),
+        "accent": RGBColor(217, 119, 6),
         "badge_bg": RGBColor(217, 119, 6),
         "badge_fg": RGBColor(255, 255, 255),
     },
-    "Modern Teal (Light)": {
-        "bg": RGBColor(240, 253, 250),
-        "card_bg": RGBColor(255, 255, 255),
-        "header_bg": RGBColor(19, 78, 74),
+    "Minimalist Modern": {
+        "style": "minimal",
+        "bg": RGBColor(255, 255, 255),
+        "card_bg": RGBColor(248, 250, 252),
+        "side_bg": RGBColor(19, 78, 74),
         "title": RGBColor(19, 78, 74),
         "body": RGBColor(31, 41, 55),
-        "muted": RGBColor(75, 85, 99),
+        "muted": RGBColor(107, 114, 128),
         "accent": RGBColor(13, 148, 136),
-        "badge_bg": RGBColor(15, 118, 110),
+        "badge_bg": RGBColor(13, 148, 136),
         "badge_fg": RGBColor(255, 255, 255),
     },
 }
@@ -239,10 +254,11 @@ def _set_run_font(run, font_name: str, size_pt: int, color: RGBColor, bold: bool
 def build_styled_pptx_bytes(
     slides: list[dict],
     font_name: str,
-    theme_name: str,
+    template_name: str,
     template_file=None,
 ) -> bytes:
-    theme = THEMES.get(theme_name, THEMES["Cyber Security (Dark)"])
+    tpl = TEMPLATES.get(template_name, TEMPLATES["Cyber Dark Cards"])
+    style = tpl["style"]
     blank_layout_idx = 6
 
     if template_file is not None:
@@ -267,193 +283,40 @@ def build_styled_pptx_bytes(
         if template_file is None:
             bg_fill = slide.background.fill
             bg_fill.solid()
-            bg_fill.fore_color.rgb = theme["bg"]
+            bg_fill.fore_color.rgb = tpl["bg"]
 
-        top_bar = slide.shapes.add_shape(
-            MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.12)
-        )
-        top_bar.fill.solid()
-        top_bar.fill.fore_color.rgb = theme["accent"]
-        top_bar.line.fill.background()
+        if style == "split":
+            # Left sidebar panel
+            sidebar = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(3.2), Inches(7.5)
+            )
+            sidebar.fill.solid()
+            sidebar.fill.fore_color.rgb = tpl["side_bg"]
+            sidebar.line.fill.background()
 
-        badge = slide.shapes.add_shape(
-            MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.65), Inches(0.38), Inches(2.55), Inches(0.45)
-        )
-        badge.fill.solid()
-        badge.fill.fore_color.rgb = theme["badge_bg"]
-        badge.line.fill.background()
-        b_tf = badge.text_frame
-        b_tf.word_wrap = True
-        b_tf.margin_left = Inches(0.12)
-        b_tf.margin_right = Inches(0.12)
-        b_tf.margin_top = Inches(0.04)
-        b_tf.margin_bottom = Inches(0.04)
-        bp = b_tf.paragraphs[0]
-        bp.alignment = PP_ALIGN.CENTER
-        brun = bp.add_run()
-        brun.text = f"{icon_emoji}  {tag_label}"
-        _set_run_font(brun, font_name, 12, theme["badge_fg"], bold=True)
+            side_tag = slide.shapes.add_textbox(Inches(0.3), Inches(0.6), Inches(2.6), Inches(1.2))
+            st_tf = side_tag.text_frame
+            st_tf.word_wrap = True
+            sp = st_tf.paragraphs[0]
+            sp.alignment = PP_ALIGN.LEFT
+            srun = sp.add_run()
+            srun.text = f"{icon_emoji}\n{tag_label}"
+            _set_run_font(srun, font_name, 16, tpl["accent"], bold=True)
 
-        title_box = slide.shapes.add_textbox(Inches(0.65), Inches(0.95), Inches(12.0), Inches(0.95))
-        t_tf = title_box.text_frame
-        t_tf.word_wrap = True
-        tp = t_tf.paragraphs[0]
-        trun = tp.add_run()
-        trun.text = f"{icon_emoji} {title_text}"
-        _set_run_font(trun, font_name, 26 if idx > 0 else 32, theme["title"], bold=True)
+            title_box = slide.shapes.add_textbox(Inches(3.55), Inches(0.5), Inches(9.2), Inches(1.15))
+            t_tf = title_box.text_frame
+            t_tf.word_wrap = True
+            tp = t_tf.paragraphs[0]
+            tp.alignment = PP_ALIGN.LEFT
+            trun = tp.add_run()
+            trun.text = title_text
+            _set_run_font(trun, font_name, 26 if idx > 0 else 30, tpl["title"], bold=True)
 
-        line = slide.shapes.add_shape(
-            MSO_SHAPE.RECTANGLE, Inches(0.65), Inches(1.95), Inches(12.03), Inches(0.03)
-        )
-        line.fill.solid()
-        line.fill.fore_color.rgb = theme["accent"]
-        line.line.fill.background()
+            line = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE, Inches(3.55), Inches(1.72), Inches(9.2), Inches(0.03)
+            )
+            line.fill.solid()
+            line.fill.fore_color.rgb = tpl["accent"]
+            line.line.fill.background()
 
-        card = slide.shapes.add_shape(
-            MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.65), Inches(2.15), Inches(12.03), Inches(4.65)
-        )
-        card.fill.solid()
-        card.fill.fore_color.rgb = theme["card_bg"]
-        card.line.color.rgb = theme["accent"]
-        card.line.width = Pt(1)
-
-        c_tf = card.text_frame
-        c_tf.word_wrap = True
-        c_tf.margin_left = Inches(0.35)
-        c_tf.margin_right = Inches(0.35)
-        c_tf.margin_top = Inches(0.28)
-        c_tf.margin_bottom = Inches(0.25)
-
-        if bullets:
-            for b_idx, b_text in enumerate(bullets):
-                p = c_tf.paragraphs[0] if b_idx == 0 else c_tf.add_paragraph()
-                p.space_after = Pt(12)
-                p.line_spacing = 1.25
-
-                dot_run = p.add_run()
-                dot_run.text = "▸  "
-                _set_run_font(dot_run, font_name, 18, theme["accent"], bold=True)
-
-                txt_run = p.add_run()
-                txt_run.text = b_text
-                _set_run_font(txt_run, font_name, 18, theme["body"], bold=False)
-
-        footer_box = slide.shapes.add_textbox(Inches(0.65), Inches(6.95), Inches(12.03), Inches(0.35))
-        f_tf = footer_box.text_frame
-        fp = f_tf.paragraphs[0]
-        fp.alignment = PP_ALIGN.RIGHT
-        frun = fp.add_run()
-        frun.text = f"Slide {idx + 1} / {total_slides}"
-        _set_run_font(frun, font_name, 11, theme["muted"], bold=False)
-
-    out = io.BytesIO()
-    prs.save(out)
-    return out.getvalue()
-
-
-api_key = get_api_key()
-model_options = list_text_gemini_models(api_key) if api_key else FALLBACK_MODELS
-
-col_u1, col_u2 = st.columns([2, 1])
-with col_u1:
-    uploaded_files = st.file_uploader(
-        "PDF (.pdf) သို့မဟုတ် Word (.docx) ဖိုင်များ တင်ပါ",
-        type=["pdf", "docx"],
-        accept_multiple_files=True,
-    )
-with col_u2:
-    custom_template = st.file_uploader(
-        "ကိုယ်ပိုင် PPT Template (.pptx) - Optional",
-        type=["pptx"],
-        accept_multiple_files=False,
-    )
-
-c1, c2, c3, c4, c5 = st.columns(5)
-with c1:
-    language_choice = st.radio(
-        "ဘာသာစကား",
-        options=["မြန်မာဘာသာ (Myanmar)", "English"],
-        index=0,
-    )
-with c2:
-    slide_count = st.slider("Slide အရေအတွက်", min_value=4, max_value=15, value=7)
-with c3:
-    theme_choice = st.selectbox("Design Theme", options=list(THEMES.keys()), index=0)
-with c4:
-    mm_font = st.text_input("မြန်မာ PPT ဖောင့်", value="Pyidaungsu")
-with c5:
-    selected_model = st.selectbox("Gemini Model", options=model_options, index=0)
-
-extra_note = st.text_area(
-    "ထပ်မံထည့်သွင်းလိုသည့် ညွှန်ကြားချက် (Optional)",
-    placeholder="ဥပမာ - Security awareness / knowledge sharing presentation ပုံစံ၊ အဓိက အလေးပေးလိုသော အချက်များ...",
-    height=75,
-)
-
-if st.button("🎨 လှပသော PowerPoint ထုတ်မည်", type="primary", use_container_width=True):
-    if not api_key:
-        st.error("Gemini API Key ထည့်သွင်းရန် လိုအပ်ပါသည်။")
-    elif not uploaded_files:
-        st.error("PDF သို့မဟုတ် Word ဖိုင် အနည်းဆုံးတစ်ခု Upload တင်ပါ။")
-    else:
-        with st.spinner(f"'{selected_model}' ဖြင့် Slide များနှင့် Theme ဒီဇိုင်း ပြုစုနေပါသည်..."):
-            try:
-                extracted_chunks = []
-                for f in uploaded_files:
-                    fname = f.name.lower()
-                    if fname.endswith(".pdf"):
-                        extracted_chunks.append(extract_pdf_text(f))
-                    elif fname.endswith(".docx"):
-                        extracted_chunks.append(extract_docx_text(f))
-
-                combined_text = "\n\n".join(extracted_chunks).strip()
-                if not combined_text:
-                    st.warning("တင်ထားသော ဖိုင်များထဲမှ စာသား ရှာမတွေ့ပါ (Scanned PDF ပုံများသာ ဖြစ်နေနိုင်ပါသည်)။")
-                else:
-                    slides = generate_slides_json(
-                        api_key=api_key,
-                        source_text=combined_text,
-                        slide_count=slide_count,
-                        language_choice=language_choice,
-                        extra_note=extra_note,
-                        model_name=selected_model,
-                    )
-
-                    is_mm = language_choice == "မြန်မာဘာသာ (Myanmar)"
-                    font_to_use = (mm_font.strip() or "Pyidaungsu") if is_mm else "Calibri"
-                    file_name = "presentation_myanmar.pptx" if is_mm else "presentation_english.pptx"
-
-                    pptx_bytes = build_styled_pptx_bytes(
-                        slides=slides,
-                        font_name=font_to_use,
-                        theme_name=theme_choice,
-                        template_file=custom_template,
-                    )
-
-                    st.session_state["slides_result"] = slides
-                    st.session_state["pptx_bytes"] = pptx_bytes
-                    st.session_state["pptx_filename"] = file_name
-                    st.session_state["pptx_lang_label"] = language_choice
-                    st.success(f"{language_choice} ({theme_choice}) PowerPoint ဖိုင် ထုတ်ပြီးပါပြီ။")
-            except Exception as e:
-                st.error(f"Error ဖြစ်ပွားခဲ့ပါသည်: {e}")
-
-if "pptx_bytes" in st.session_state and "slides_result" in st.session_state:
-    st.divider()
-    st.download_button(
-        label=f"⬇️ {st.session_state.get('pptx_lang_label', '')} PowerPoint (.pptx) ဒေါင်းလုဒ်ဆွဲရန်",
-        data=st.session_state["pptx_bytes"],
-        file_name=st.session_state.get("pptx_filename", "presentation.pptx"),
-        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        use_container_width=True,
-    )
-
-    st.subheader(f"📝 Slides Preview ({st.session_state.get('pptx_lang_label', '')})")
-    all_slides = st.session_state.get("slides_result", [])
-    for i, s in enumerate(all_slides):
-        icon_emoji, tag_label = detect_slide_icon_and_tag(
-            s.get("title", ""), s.get("bullets", []), i, len(all_slides)
-        )
-        st.markdown(f"**Slide {i + 1} `{tag_label}`: {icon_emoji} {s.get('title', '')}**")
-        for b in s.get("bullets", []):
-            st.markdown(f"- {b}")
+            card = slide
