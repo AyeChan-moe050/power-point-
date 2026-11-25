@@ -112,4 +112,161 @@ def generate_bilingual_slides_json(
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
-            response
+            response_schema=response_schema,
+        ),
+    )
+
+    raw_text = response.text or "{}"
+    return json.loads(raw_text)
+
+
+def build_pptx_bytes(slides: list[dict], font_name: str) -> bytes:
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+
+    for idx, slide_data in enumerate(slides):
+        title_text = str(slide_data.get("title", "")).strip()
+        bullets = [str(b).strip() for b in slide_data.get("bullets", []) if str(b).strip()]
+
+        if idx == 0:
+            layout = prs.slide_layouts[0]
+            slide = prs.slides.add_slide(layout)
+            if slide.shapes.title:
+                slide.shapes.title.text = title_text
+                for p in slide.shapes.title.text_frame.paragraphs:
+                    for r in p.runs:
+                        r.font.name = font_name
+                        r.font.size = Pt(36)
+            if len(slide.placeholders) > 1 and slide.placeholders[1].has_text_frame:
+                sub_tf = slide.placeholders[1].text_frame
+                sub_tf.clear()
+                for i, b in enumerate(bullets[:3]):
+                    p = sub_tf.paragraphs[0] if i == 0 else sub_tf.add_paragraph()
+                    p.text = b
+                    for r in p.runs:
+                        r.font.name = font_name
+                        r.font.size = Pt(20)
+        else:
+            layout = prs.slide_layouts[1]
+            slide = prs.slides.add_slide(layout)
+            if slide.shapes.title:
+                slide.shapes.title.text = title_text
+                for p in slide.shapes.title.text_frame.paragraphs:
+                    for r in p.runs:
+                        r.font.name = font_name
+                        r.font.size = Pt(28)
+
+            body_placeholder = None
+            for shape in slide.placeholders:
+                if shape.placeholder_format.idx == 1 and shape.has_text_frame:
+                    body_placeholder = shape
+                    break
+
+            if body_placeholder:
+                tf = body_placeholder.text_frame
+                tf.clear()
+                for i, b in enumerate(bullets):
+                    p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+                    p.text = b
+                    p.level = 0
+                    for r in p.runs:
+                        r.font.name = font_name
+                        r.font.size = Pt(20)
+
+    out = io.BytesIO()
+    prs.save(out)
+    return out.getvalue()
+
+
+api_key = get_api_key()
+
+uploaded_files = st.file_uploader(
+    "PDF (.pdf) သို့မဟုတ် Word (.docx) ဖိုင်များ တင်ပါ",
+    type=["pdf", "docx"],
+    accept_multiple_files=True,
+)
+
+c1, c2 = st.columns(2)
+with c1:
+    slide_count = st.slider("ခန့်မှန်း Slide အရေအတွက်", min_value=4, max_value=20, value=8)
+with c2:
+    mm_font = st.text_input("မြန်မာ PPT ဖောင့်အမည် (PowerPoint တွင် ဖွင့်ရန်)", value="Pyidaungsu")
+
+extra_note = st.text_area(
+    "ထပ်မံထည့်သွင်းလိုသည့် ညွှန်ကြားချက် (Optional)",
+    placeholder="ဥပမာ - အစိုးရဌာန အစည်းအဝေး/သင်တန်း အနှစ်ချုပ်ပုံစံ၊ အဓိက အလေးပေးလိုသော အချက်များ...",
+    height=85,
+)
+
+if st.button("🚀 မြန်မာ + English PowerPoint ၂ ဖိုင် ထုတ်မည်", type="primary", use_container_width=True):
+    if not api_key:
+        st.error("Gemini API Key ထည့်သွင်းရန် လိုအပ်ပါသည်။")
+    elif not uploaded_files:
+        st.error("PDF သို့မဟုတ် Word ဖိုင် အနည်းဆုံးတစ်ခု Upload တင်ပါ။")
+    else:
+        with st.spinner("ဖိုင်များကို ဖတ်ရှုပြီး မြန်မာ နှင့် English PowerPoint ဖိုင်များ ပြုစုနေပါသည်..."):
+            try:
+                extracted_chunks = []
+                for f in uploaded_files:
+                    fname = f.name.lower()
+                    if fname.endswith(".pdf"):
+                        extracted_chunks.append(extract_pdf_text(f))
+                    elif fname.endswith(".docx"):
+                        extracted_chunks.append(extract_docx_text(f))
+
+                combined_text = "\n\n".join(extracted_chunks).strip()
+                if not combined_text:
+                    st.warning("တင်ထားသော ဖိုင်များထဲမှ စာသား ရှာမတွေ့ပါ (Scanned PDF ပုံများသာ ဖြစ်နေနိုင်ပါသည်)။")
+                else:
+                    slide_data = generate_bilingual_slides_json(
+                        api_key=api_key,
+                        source_text=combined_text,
+                        slide_count=slide_count,
+                        extra_note=extra_note,
+                    )
+                    mm_slides = slide_data.get("myanmar", [])
+                    en_slides = slide_data.get("english", [])
+
+                    mm_pptx_bytes = build_pptx_bytes(mm_slides, font_name=mm_font.strip() or "Pyidaungsu")
+                    en_pptx_bytes = build_pptx_bytes(en_slides, font_name="Calibri")
+
+                    st.session_state["mm_slides"] = mm_slides
+                    st.session_state["en_slides"] = en_slides
+                    st.session_state["mm_pptx"] = mm_pptx_bytes
+                    st.session_state["en_pptx"] = en_pptx_bytes
+                    st.success("မြန်မာ နှင့် English PowerPoint ဖိုင် ၂ ခု ထုတ်ပြီးပါပြီ။")
+            except Exception as e:
+                st.error(f"Error ဖြစ်ပွားခဲ့ပါသည်: {e}")
+
+if "mm_pptx" in st.session_state and "en_pptx" in st.session_state:
+    st.divider()
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            label="⬇️ မြန်မာ PowerPoint (.pptx) ဒေါင်းလုဒ်ဆွဲရန်",
+            data=st.session_state["mm_pptx"],
+            file_name="presentation_myanmar.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            use_container_width=True,
+        )
+    with dl2:
+        st.download_button(
+            label="⬇️ English PowerPoint (.pptx) ဒေါင်းလုဒ်ဆွဲရန်",
+            data=st.session_state["en_pptx"],
+            file_name="presentation_english.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            use_container_width=True,
+        )
+
+    tab_mm, tab_en = st.tabs(["🇲🇲 မြန်မာ Slides Preview", "🇬🇧 English Slides Preview"])
+    with tab_mm:
+        for i, s in enumerate(st.session_state.get("mm_slides", []), start=1):
+            st.markdown(f"**Slide {i}: {s.get('title', '')}**")
+            for b in s.get("bullets", []):
+                st.markdown(f"- {b}")
+    with tab_en:
+        for i, s in enumerate(st.session_state.get("en_slides", []), start=1):
+            st.markdown(f"**Slide {i}: {s.get('title', '')}**")
+            for b in s.get("bullets", []):
+                st.markdown(f"- {b}")
